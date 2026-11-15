@@ -1,0 +1,41 @@
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 6d6824770..20e4aac95 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1072,10 +1072,6 @@ struct task_struct {
+ 
+ 	struct nameidata		*nameidata;
+ 
+-#ifdef CONFIG_SYSVIPC
+-	struct sysv_sem			sysvsem;
+-	struct sysv_shm			sysvshm;
+-#endif
+ #ifdef CONFIG_DETECT_HUNG_TASK
+ 	unsigned long			last_switch_count;
+ 	unsigned long			last_switch_time;
+@@ -1560,6 +1556,25 @@ struct task_struct {
+ 	 *
+ 	 * Do not put anything below here!
+ 	 */
++
++#ifdef CONFIG_SYSVIPC
++#ifndef __GENKSYMS__
++	/*
++	 * ABI preservation for a kernel whose stock build had CONFIG_SYSVIPC=n:
++	 *
++	 * 1. These two members sit at the tail instead of their historical
++	 *    position in the middle of task_struct, so enabling SYSVIPC does
++	 *    not shift the offset of a single field that pre-existing
++	 *    out-of-tree modules were compiled against.
++	 * 2. They are hidden from genksyms, so the modversions CRC of
++	 *    struct task_struct -- and therefore of every exported symbol
++	 *    whose type graph reaches it -- stays identical to the stock
++	 *    kernel and the vendor modules keep passing their version checks.
++	 */
++	struct sysv_sem			sysvsem;
++	struct sysv_shm			sysvshm;
++#endif
++#endif
+ };
+ 
+ static inline struct pid *task_pid(struct task_struct *task)

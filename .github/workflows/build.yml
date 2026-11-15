@@ -116,6 +116,11 @@ jobs:
           fi
           echo "kernel $(make -s -C ack kernelversion 2>/dev/null || echo unknown) @ $(git -C ack rev-parse --short HEAD)"
 
+      - name: Apply ABI patches
+        run: |
+          bash scripts/apply-patches.sh "$PWD/ack"
+          git -C ack diff --stat
+
       - name: Cache stock vendor modules (CRC oracle)
         uses: actions/cache@v4
         with:
