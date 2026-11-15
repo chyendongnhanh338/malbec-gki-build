@@ -17,8 +17,10 @@ on:
       trim:
         description: "保留 CONFIG_TRIM_UNUSED_KSYMS（off = 全导出，兜底用）"
         type: choice
-        options: [on, off]
-        default: on
+        # 必须加引号：YAML 1.1 会把裸 on/off 解析成布尔值，
+        # 导致 dispatch 时报 "Provided value 'on' ... not in the list of allowed values"
+        options: ["on", "off"]
+        default: "on"
   push:
     tags: ["v*"]
 
