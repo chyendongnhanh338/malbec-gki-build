@@ -57,7 +57,9 @@ if [ "$TRIM" = "off" ]; then
   echo "  ! TRIM_UNUSED_KSYMS disabled (escape hatch: export everything)"
   "$SRC/scripts/config" --file "$OUT/.config" -d TRIM_UNUSED_KSYMS
 else
-  bash "$REPO/scripts/make-symbollist.sh" "$SRC"
+  # 同时写到 srctree 和构建目录：Makefile.modpost 会先看 cwd（= 构建目录）
+  # 里有没有这个文件，没有才回退到 $(srctree)/。写两份最稳。
+  bash "$REPO/scripts/make-symbollist.sh" "$SRC" "$OUT/abi_symbollist.raw"
 fi
 
 make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 olddefconfig >/dev/null

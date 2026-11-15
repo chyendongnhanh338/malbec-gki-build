@@ -150,7 +150,15 @@ jobs:
         id: gate
         run: |
           set +e
+          # 白名单失效的硬检查：export 数不应明显低于 ABI 列表规模
+          MIN=0
+          if [ -f ack/abi_symbollist.raw ]; then
+            MIN=$(( $(wc -l < ack/abi_symbollist.raw) * 90 / 100 ))
+          fi
+          echo "min-symvers=$MIN"
           python3 scripts/gate-crc.py out/Module.symvers vk/modules \
+              --gki-symbols ack/abi_symbollist.raw \
+              --min-symvers "$MIN" \
               --json "gate-${{ matrix.variant }}.json" \
               --variant "${{ matrix.variant }}" > "gate-${{ matrix.variant }}.md"
           rc=$?
@@ -201,7 +209,7 @@ jobs:
       - name: Fail on CRC mismatch
         if: steps.gate.outputs.rc != '0'
         run: |
-          echo "::error::CRC mismatch on ${{ matrix.variant }} — 这些符号的 ABI 被 config 改动了，刷上去对应厂商 .ko 会加载失败"
+          echo "::error::variant ${{ matrix.variant }} 闸门未通过 — 要么 CRC 不匹配（该组 config 改动了 ABI），要么导出符号太少（白名单没生效）"
           exit 1
 
   release:

@@ -7,16 +7,30 @@ MISMATCH  某个符号新内核算出的 CRC 与厂商模块记录的 CRC 不同
           -> 该 .ko 加载时会报 "disagrees about version of symbol X"
           -> 无 Wi-Fi / 无触摸 / 卡开机动画。这是硬失败，退出码 1。
 
-MISSING   厂商模块引用了某符号，而新内核 Module.symvers 里没有
-          -> 可能是被 CONFIG_TRIM_UNUSED_KSYMS 裁掉，也可能该符号本来就由
-             另一个厂商模块导出（vendor->vendor）。仅供参考，不判失败；
-             但如果数量异常多，说明白名单没生成对。
+MISSING   厂商模块引用了某符号，而新内核 Module.symvers 里没有。
+          --gki-symbols 给出 ABI 列表后，MISSING 会被拆成两类：
+            missing_gki    符号本该由 GKI 导出（在 abi_gki_aarch64* 里）却没导出
+                           -> TRIM 白名单没生效 / config 关掉了子系统。这是真问题。
+            missing_vendor 不在 ABI 列表里，通常由另一个厂商模块自己导出
+                           -> 正常，仅供参考。
+
+TOO-FEW   新内核 Module.symvers 条数低于 --min-symvers
+          -> 白名单没被 modpost 读到时的典型症状：导出被裁到只剩树内模块用到的那些，
+             编出来的 Image 会让原厂 vendor 模块全部 "Unknown symbol"。
+             这是本次踩过的坑，所以单独设成硬失败。
 
 只依赖标准库（自带最小 ELF 解析，不需要 pyelftools）。
 
 用法
 ----
-  gate-crc.py <Module.symvers> <vendor modules dir> [--json out.json] [--variant g1]
+  gate-crc.py <Module.symvers> <vendor modules dir> [options]
+
+选项
+  --gki-symbols FILE   abi_symbollist.raw（扁平格式），用于把 MISSING 分成
+                       「本该 GKI 导出」和「厂商互导」两类
+  --min-symvers N      symvers 条数下限，低于则失败（防白名单失效）
+  --variant NAME       报告标题用
+  --json out.json      机器可读结果
 
 退出码：0 = 无 MISMATCH；1 = 有 MISMATCH；2 = 输入有问题
 """
@@ -111,6 +125,8 @@ def main():
     ap.add_argument("modules_dir")
     ap.add_argument("--json", default="gate.json")
     ap.add_argument("--variant", default="")
+    ap.add_argument("--gki-symbols", default="")
+    ap.add_argument("--min-symvers", type=int, default=0)
     args = ap.parse_args()
 
     new = load_symvers(args.symvers)
@@ -140,16 +156,47 @@ def main():
             else:
                 missing.setdefault(name, []).append(base)
 
-    ok = not mismatches
+    gki = set()
+    if args.gki_symbols:
+        with open(args.gki_symbols, errors="replace") as fh:
+            gki = {ln.strip() for ln in fh if ln.strip()}
+    missing_gki = {k: v for k, v in missing.items() if k in gki} if gki else {}
+    missing_vendor = {k: v for k, v in missing.items() if k not in gki} if gki else dict(missing)
+
+    too_few = args.min_symvers and len(new) < args.min_symvers
+    ok = not mismatches and not too_few
     lines = [
         f"# CRC gate — variant `{args.variant or 'n/a'}`",
         "",
         f"- vendor modules scanned: **{len(kos)}** ({checked} with `__versions`"
         + (f", {len(no_versions)} without" if no_versions else "") + ")",
         f"- symbols in new Module.symvers: **{len(new)}**",
-        f"- **MISMATCH: {len(mismatches)}** " + ("✅" if ok else "❌"),
-        f"- MISSING (informational, may be vendor→vendor exports): {len(missing)}",
+        f"- **MISMATCH: {len(mismatches)}** " + ("✅" if not mismatches else "❌"),
     ]
+    if args.min_symvers:
+        lines.append(
+            f"- exports: **{len(new)}** (min {args.min_symvers}) "
+            + ("✅" if not too_few else "❌ 白名单没生效"))
+    if gki:
+        lines.append(
+            f"- missing from ABI list (`abi_gki_aarch64*`): **{len(missing_gki)}** "
+            + ("✅" if not missing_gki else "⚠️ 白名单里的符号没导出，检查 TRIM / config"))
+        lines.append(f"- MISSING, 厂商互导（正常）: {len(missing_vendor)}")
+    else:
+        lines.append(f"- MISSING (informational, may be vendor→vendor exports): {len(missing)}")
+
+    if too_few:
+        lines += ["", "## 白名单没生效",
+                  "",
+                  f"新内核只导出了 {len(new)} 个符号，低于下限 {args.min_symvers}。",
+                  "检查 `abi_symbollist.raw` 是否为**扁平格式**（一行一个符号、无缩进、无表头），"
+                  "以及 modpost 是否在构建目录或 srctree 找到了它。", ""]
+
+    if missing_gki:
+        lines += ["", "<details><summary>missing_gki（前 30 条）</summary>", ""]
+        for name in sorted(missing_gki)[:30]:
+            lines.append(f"- `{name}` ← {len(missing_gki[name])} 个 .ko")
+        lines += ["", "</details>"]
 
     if mismatches:
         lines += ["", "## MISMATCH — 这些符号的 ABI 被这次 config 改动了", "",
@@ -172,8 +219,12 @@ def main():
         "modules": len(kos),
         "scanned": checked,
         "symvers": len(new),
+        "min_symvers": args.min_symvers,
+        "too_few": bool(too_few),
         "mismatch": {k: {"new": v[0], "vendor": v[1], "kos": v[2]} for k, v in mismatches.items()},
         "missing": {k: v for k, v in missing.items()},
+        "missing_gki": sorted(missing_gki),
+        "missing_vendor_count": len(missing_vendor),
         "no_versions": no_versions,
     }
     with open(args.json, "w") as fh:
