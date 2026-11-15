@@ -1,0 +1,6 @@
+SPDX-License-Identifier: GPL-2.0-only
+
+This repository contains a kernel configuration derived from a Linux kernel
+image (GPL-2.0-only) plus build scripts by the same license.
+
+Full license text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt

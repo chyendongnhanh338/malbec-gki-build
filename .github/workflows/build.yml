@@ -1,0 +1,225 @@
+name: build-malbec-gki
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_branch:
+        description: "ACK 分支"
+        default: android15-6.6
+        required: true
+      kernel_commit:
+        description: "固定到某个 commit（留空 = 分支头）"
+        default: ""
+      variants:
+        description: "要构建的变体（逗号分隔）"
+        default: "baseline,g1,g1g2,g1g2g3,all"
+        required: true
+      trim:
+        description: "保留 CONFIG_TRIM_UNUSED_KSYMS（off = 全导出，兜底用）"
+        type: choice
+        options: [on, off]
+        default: on
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  ARCH: arm64
+  LLVM: "1"
+  LLVM_IAS: "1"
+  CLANG_VERSION: r510928
+  KERNEL_BRANCH: ${{ inputs.kernel_branch || 'android15-6.6' }}
+  KERNEL_REMOTE: https://android.googlesource.com/kernel/common
+  VENDOR_REMOTE: https://github.com/suddenBook/android_device_lenovo_malbec-kernel
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        env:
+          VARIANTS: ${{ inputs.variants || 'baseline,g1,g1g2,g1g2g3,all' }}
+        run: |
+          m=$(python3 -c 'import json,os;print(json.dumps([x.strip() for x in os.environ["VARIANTS"].split(",") if x.strip()]))')
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+          echo "matrix = $m"
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    name: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 根分区只剩 ~14 GB，DEBUG_INFO + BTF 的 out/ 会超；先腾出 ~25 GB
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo apt-get clean
+          df -h /
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bc bison flex libssl-dev libelf-dev dwarves cpio \
+                                    rsync zip unzip git python3-pyelftools ccache
+          ccache --max-size=1.5G
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: clang
+          key: clang-${{ env.CLANG_VERSION }}-v1
+
+      - name: Fetch clang ${{ env.CLANG_VERSION }}
+        run: |
+          mkdir -p clang
+          [ -x clang/bin/clang ] && { clang/bin/clang --version | head -1; exit 0; }
+          curl -fsSL --retry 3 \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android15-release/clang-${{ env.CLANG_VERSION }}.tar.gz" \
+            | tar -xz -C clang
+          clang/bin/clang --version | head -1
+
+      - name: Cache ACK source
+        uses: actions/cache@v4
+        with:
+          path: ack
+          key: ack-${{ env.KERNEL_BRANCH }}-v1
+
+      - name: Fetch ACK source
+        run: |
+          if [ -d ack/.git ]; then echo "from cache"; else
+            git clone --depth 1 --filter=blob:none -b "$KERNEL_BRANCH" "$KERNEL_REMOTE" ack
+          fi
+          if [ -n "${{ inputs.kernel_commit }}" ]; then
+            git -C ack fetch --depth 1 origin "${{ inputs.kernel_commit }}"
+            git -C ack checkout "${{ inputs.kernel_commit }}"
+          fi
+          echo "kernel $(make -s -C ack kernelversion 2>/dev/null || echo unknown) @ $(git -C ack rev-parse --short HEAD)"
+
+      - name: Cache stock vendor modules (CRC oracle)
+        uses: actions/cache@v4
+        with:
+          path: vk
+          key: vendor-modules-v1
+
+      - name: Fetch stock vendor modules
+        run: |
+          if [ ! -d vk/modules ]; then
+            git clone --depth 1 --filter=blob:none --sparse "$VENDOR_REMOTE" vk
+            git -C vk sparse-checkout set modules
+          fi
+          echo "vendor .ko: $(find vk/modules -name '*.ko' | wc -l)"
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ccache
+          key: ccache-${{ env.KERNEL_BRANCH }}-baseline-v1
+          restore-keys: |
+            ccache-${{ env.KERNEL_BRANCH }}-
+
+      - name: Prepare config
+        run: |
+          export PATH="$PWD/clang/bin:$PATH"
+          bash scripts/apply-variant.sh "$PWD/ack" "$PWD/out" "${{ matrix.variant }}" "${{ inputs.trim || 'on' }}"
+
+      - name: Build Image + modules
+        run: |
+          set -o pipefail
+          export PATH="$PWD/clang/bin:$PATH"
+          make -C ack O="$PWD/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 CC="ccache clang" \
+               -j"$(nproc)" Image modules 2>&1 | tee build.log
+          ls -lh out/arch/arm64/boot/Image out/Module.symvers
+
+      - name: CRC gate
+        id: gate
+        run: |
+          set +e
+          python3 scripts/gate-crc.py out/Module.symvers vk/modules \
+              --json "gate-${{ matrix.variant }}.json" \
+              --variant "${{ matrix.variant }}" > "gate-${{ matrix.variant }}.md"
+          rc=$?
+          cat "gate-${{ matrix.variant }}.md"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## variant \`${{ matrix.variant }}\`"
+            echo
+            bash scripts/show-features.sh out/.config
+            echo
+            cat "gate-${{ matrix.variant }}.md" 2>/dev/null || echo "_gate did not run_"
+            echo
+            echo "<details><summary>build.log tail</summary>"
+            echo
+            echo '```'
+            tail -25 build.log 2>/dev/null || true
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save ccache
+        if: matrix.variant == 'baseline' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: .ccache
+          key: ccache-${{ env.KERNEL_BRANCH }}-baseline-v1
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: malbec-gki-${{ matrix.variant }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            out/arch/arm64/boot/Image
+            out/Module.symvers
+            out/.config
+            gate-${{ matrix.variant }}.json
+            gate-${{ matrix.variant }}.md
+            build.log
+
+      - name: Fail on CRC mismatch
+        if: steps.gate.outputs.rc != '0'
+        run: |
+          echo "::error::CRC mismatch on ${{ matrix.variant }} — 这些符号的 ABI 被 config 改动了，刷上去对应厂商 .ko 会加载失败"
+          exit 1
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Collect
+        run: |
+          mkdir -p dist
+          for d in art/*/; do
+            v=$(basename "$d"); v=${v#malbec-gki-}
+            [ -f "$d/Image" ] && cp "$d/Image" "dist/Image-$v"
+            [ -f "$d/Module.symvers" ] && cp "$d/Module.symvers" "dist/Module.symvers-$v"
+          done
+          ls -lh dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

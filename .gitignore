@@ -1,0 +1,16 @@
+# build artifacts / caches
+ack/
+vk/
+clang/
+out/
+.ccache/
+*.log
+gate-*.json
+gate-*.md
+Image*
+boot_a.img
+new-boot_a.img
+stock-boot_a.img
+dist/
+art/
+__pycache__/
