@@ -21,6 +21,9 @@ case "$VARIANT" in
   g1g2)     FRAGS=(G1-container G2-devices) ;;
   g1g2g3)   FRAGS=(G1-container G2-devices G3-network) ;;
   all)      FRAGS=(G1-container G2-devices G3-network G4-userns) ;;
+  pidonly)  FRAGS=(D1-pidns-only) ;;
+  mqonly)   FRAGS=(D2-mq-only) ;;
+  sysvonly) FRAGS=(D3-sysvipc-only) ;;
   *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
 esac
 
