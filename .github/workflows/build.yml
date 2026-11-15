@@ -166,6 +166,23 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Inspect Image
+        if: always()
+        run: |
+          IMG=out/arch/arm64/boot/Image
+          if [ -f "$IMG" ]; then
+            echo "### Image"
+            echo '```'
+            ls -lh "$IMG"
+            strings "$IMG" | grep -m1 '^Linux version 6'
+            strings "$IMG" | grep -m1 -E '^[0-9].*SMP .*mod_unload modversions'
+            echo '```'
+          fi
+          echo "### 厂商模块 vermagic 对照（版本段会被 same_magic 跳过，只比后面部分）"
+          echo '```'
+          strings vk/modules/vendor_dlkm/*.ko 2>/dev/null | grep -m1 'mod_unload modversions' || true
+          echo '```'
+
       - name: Summary
         if: always()
         run: |
@@ -198,6 +215,8 @@ jobs:
           name: malbec-gki-${{ matrix.variant }}
           retention-days: 14
           if-no-files-found: warn
+          # out/.config 是隐藏文件，v4 默认不上传
+          include-hidden-files: true
           path: |
             out/arch/arm64/boot/Image
             out/Module.symvers
