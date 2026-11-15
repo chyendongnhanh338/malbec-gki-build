@@ -24,6 +24,14 @@ case "$VARIANT" in
   pidonly)  FRAGS=(D1-pidns-only) ;;
   mqonly)   FRAGS=(D2-mq-only) ;;
   sysvonly) FRAGS=(D3-sysvipc-only) ;;
+  e-devtmpfs)  FRAGS=(E1-devtmpfs) ;;
+  e-cgpids)    FRAGS=(E2-cgpids) ;;
+  e-cgdevice)  FRAGS=(E3-cgdevice) ;;
+  e-cfsbw)     FRAGS=(E4-cfsbw) ;;
+  e-macvlan)   FRAGS=(E5-macvlan) ;;
+  e-nft)       FRAGS=(E6-nft) ;;
+  e-userns)    FRAGS=(E7-userns) ;;
+  g1g2x)       FRAGS=(G1-container G2-devices E1-devtmpfs) ;;
   *) echo "unknown variant: $VARIANT" >&2; exit 2 ;;
 esac
 
