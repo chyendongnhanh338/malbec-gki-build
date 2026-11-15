@@ -14,6 +14,11 @@ on:
         description: "要构建的变体（逗号分隔）"
         default: "baseline,g1,g1g2,g1g2g3,all"
         required: true
+      ccache:
+        description: "用 ccache 编译（off = 直连 clang，用于排除 ccache 干扰）"
+        type: choice
+        options: ["on", "off"]
+        default: "on"
       trim:
         description: "保留 CONFIG_TRIM_UNUSED_KSYMS（off = 全导出，兜底用）"
         type: choice
@@ -126,6 +131,7 @@ jobs:
           echo "vendor .ko: $(find vk/modules -name '*.ko' | wc -l)"
 
       - name: Restore ccache
+        if: inputs.ccache != 'off'
         uses: actions/cache/restore@v4
         with:
           path: .ccache
@@ -142,7 +148,10 @@ jobs:
         run: |
           set -o pipefail
           export PATH="$PWD/clang/bin:$PATH"
-          make -C ack O="$PWD/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 CC="ccache clang" \
+          CCBIN="clang"
+          [ "${{ inputs.ccache }}" != "off" ] && CCBIN="ccache clang"
+          echo "CC=$CCBIN"
+          make -C ack O="$PWD/out" ARCH=arm64 LLVM=1 LLVM_IAS=1 CC="$CCBIN" \
                -j"$(nproc)" Image modules 2>&1 | tee build.log
           ls -lh out/arch/arm64/boot/Image out/Module.symvers
 
@@ -202,7 +211,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save ccache
-        if: matrix.variant == 'baseline' && success()
+        if: matrix.variant == 'baseline' && success() && inputs.ccache != 'off'
         uses: actions/cache/save@v4
         with:
           path: .ccache
