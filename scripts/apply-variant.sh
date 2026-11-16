@@ -25,6 +25,8 @@ case "$VARIANT" in
   g1g2)     FRAGS=(G1-container G2-devices) ;;
   g1g2g3)   FRAGS=(G1-container G2-devices G3-network) ;;
   all)      FRAGS=(G1-container G2-devices G3-network G4-userns) ;;
+  sysv-noipcns) FRAGS=(E10-sysv-noipcns) ;;
+  pid-mq)   FRAGS=(D1-pidns-only D2-mq-only) ;;
   pidonly)  FRAGS=(D1-pidns-only) ;;
   mqonly)   FRAGS=(D2-mq-only) ;;
   sysvonly) FRAGS=(D3-sysvipc-only) ;;
