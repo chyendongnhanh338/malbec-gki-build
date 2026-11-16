@@ -60,6 +60,28 @@ Busybox setup failed. Aborting...
 → `tools/busybox`、`libmagiskboot.so` → `tools/magiskboot`、`libmagiskpolicy.so` → `tools/magiskpolicy`）。
 `scripts/repack-boot.sh` / `.ps1` 的 fastboot 路线不受这个限制。
 
+**第二个必改点：本设备的 `boot.img` 没有 ramdisk。** Header v4、`RAMDISK_SZ=0`
+（通用 ramdisk 在 `init_boot` / `vendor_boot`，本包不碰它们）。
+AK3 模板默认的 `dump_boot` / `write_boot` 会去解包 ramdisk，找不到就直接中止：
+
+```
+No ramdisk found to unpack. Aborting...
+```
+
+按 AK3 源码自己的注释（`anykernel.sh` 里写着 *use split_boot to skip ramdisk unpack,
+e.g. for devices with init_boot ramdisk*），改成：
+
+```sh
+dump_boot;   ->  split_boot;
+write_boot;  ->  flash_boot;
+```
+
+并删掉模板里 `init.rc` / `init.tuna.rc` / `fstab.tuna` 的示例编辑（那些只在解包出的
+ramdisk 目录里才有意义，`split_boot` 后 cwd 是包根，会报 *can't read init.rc*）。
+`magiskboot repack` 在没有 `ramdisk.cpio` 时会保留原图的 `ramdisk_size`（=0），
+只替换 kernel 段——这一点已用合成镜像端到端验证过。
+现成产物：release `v1.2` 的 `ak3-all-arm64-nord.zip`。
+
 ### 2. 备份原厂 boot，只换 kernel 段
 
 ```bash
