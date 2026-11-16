@@ -49,6 +49,17 @@ ls img/gate-all.md                        # 闸门报告
 > AnyKernel3 zip 的定位是「recovery 刷机包」，只换 `boot` 分区的 kernel 段。
 > Magisk / KernelSU 的「模块 → 从本地安装」会报 *Not a Magisk module* 而拒绝，这不是包坏了。
 
+**注意：上游 AnyKernel3 模板自带的是 32 位 ARM 的 `busybox` / `magiskboot` / `magiskpolicy`**，
+在 64 位-only 的 Android 上会直接失败：
+
+```
+Busybox setup failed. Aborting...
+```
+
+打 zip 前必须换成 aarch64 版（从 Magisk APK 的 `lib/arm64-v8a/` 取 `libbusybox.so`
+→ `tools/busybox`、`libmagiskboot.so` → `tools/magiskboot`、`libmagiskpolicy.so` → `tools/magiskpolicy`）。
+`scripts/repack-boot.sh` / `.ps1` 的 fastboot 路线不受这个限制。
+
 ### 2. 备份原厂 boot，只换 kernel 段
 
 ```bash
