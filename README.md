@@ -17,6 +17,104 @@
 
 `config/device-6.6.87.config` 是**设备内核自己的 config**（从 `Image` 的 `IKCFG_ST…IKCFG_ED` gzip 段解出来的），不是 `gki_defconfig`。用它对 ABI 才有意义：CRC 由 `genksyms` 按「头文件声明文本 + 配置」算出，config 差一项就可能全变。
 
+## 快速使用（拿到产物之后）
+
+### 0. 先确认闸门是绿的
+
+每次运行的 Summary 里第一段就是 CRC gate。**`MISMATCH` 必须是 0**，否者不要刷——
+那意味着这批 config 改动了某个导出符号的 ABI，刷上去对应厂商驱动会加载失败（无 Wi-Fi / 无触摸）。
+
+### 1. 下载产物
+
+```bash
+# 换成你那次运行的 id（Actions 页面 URL 里 /runs/ 后面那串数字）
+RUN=43866088759
+gh run download "$RUN" -R <你的账号>/malbec-gki-build -n malbec-gki-all -D img
+ls -lh img/out/arch/arm64/boot/Image      # 约 36 MB
+ls img/gate-all.md                        # 闸门报告
+```
+
+产物内容：`out/arch/arm64/boot/Image`（内核）、`out/Module.symvers`、
+`out/.config`（这次实际用的配置）、`gate-<variant>.{md,json}`、`build.log`。
+
+### 2. 备份原厂 boot，只换 kernel 段
+
+```bash
+# 备份（先确认当前槽位）
+adb shell getprop ro.boot.slot_suffix            # 例如 _a
+adb shell 'dd if=/dev/block/by-name/boot_a of=/data/local/tmp/boot_a.img bs=1M'
+adb pull /data/local/tmp/boot_a.img ./stock-boot_a.img
+
+# 用原厂 boot.img 换上自编 Image（脚本会自动自检 kernel 段 sha256）
+scripts/repack-boot.sh stock-boot_a.img img/out/arch/arm64/boot/Image new-boot_a.img
+```
+
+**不要动 `vendor_boot`**：19 个 DTB（TunaP 是第 19 个）、622 个闭源 `.ko`、
+bootconfig 全在里面。
+
+### 3. 刷入
+
+```bash
+fastboot --disable-verity --disable-verification flash vbmeta_a vbmeta.img
+fastboot flash boot_a new-boot_a.img
+fastboot reboot
+```
+
+### 4. 验收
+
+```sh
+su -c 'zcat /proc/config.gz | grep -E "CONFIG_(PID_NS|IPC_NS|USER_NS|DEVTMPFS|CGROUP_PIDS)="'
+su -c 'unshare -pf --mount-proc true && echo PIDns_OK'
+su -c 'unshare -i true && echo IPCns_OK'
+su -c 'unshare -U true && echo USERns_OK'
+su -c 'ls -l /dev | head'            # 有真实设备节点 = DEVTMPFS 生效
+su -c 'droidspaces check'            # 应该全绿，且不需要加载任何 .ko
+```
+
+### 5. 回滚
+
+```bash
+fastboot flash boot_a stock-boot_a.img
+fastboot reboot
+```
+
+bootloader 一直在，风险窗口只有「刷完 `boot_a` 到确认能开机」这一段。
+
+### 6. 选哪一档
+
+| 你要什么 | 用哪个变体 |
+|---|---|
+| 跑容器（最小） | `g1` — PID/IPC/SysV/mqueue |
+| **推荐**：容器 + 真实 `/dev` + 容器独立 IP + uid 隔离 | **`all`**（本仓库已验证 0 失配） |
+| 想完全避开 userns 语义风险 | `safe`（= `all` 去掉 cgroup pids/device 与 nftables） |
+| 需要 `--pids-limit` / 设备白名单 | `all`（`CGROUP_PIDS`/`CGROUP_DEVICE` 已开） |
+| 需要 `--cpus` 限额 | **不支持**，见 `config/features/X1-cfsbw.config` 的说明 |
+
+### 7. OTA 之后
+
+PixelOS 更新内核会覆盖 `boot_a`，需要重编一次：
+
+```bash
+# 1) 取新内核的 config（IKCONFIG_PROC=y，设备上就能拿）
+adb shell 'su -c "zcat /proc/config.gz"' > config/device-6.6.87.config
+#    或者从 boot.img 里的 IKCFG_ST 段解出来：
+#    python3 scripts/extract-config-from-image.py kernel.img config/device-6.6.87.config
+
+# 2) 先跑 baseline，确认工具链+新 config 仍能复现原厂 ABI（必须 0 失配）
+gh workflow run build.yml -f variants=baseline -f trim=on
+
+# 3) 再跑 all
+gh workflow run build.yml -f variants=all -f trim=on
+```
+
+### 8. 想加/减功能
+
+- 改 `config/features/*.config`（或加一个新的），在 `scripts/apply-variant.sh` 里登记成新变体；
+- **新开关第一次一定要单独跑**（像 `e-devtmpfs` 那样一个开关一个变体），看它对 CRC 的影响；
+- 若失配，先判断属于哪一类：
+  - 成员插在枢纽结构体中间 / 数组尺寸变化 → 可用「挪到尾部 + `#ifndef __GENKSYMS__`」补丁（见 `scripts/patches/`）；
+  - **按值内嵌的结构体变大**（如 `cfs_rq` → `struct rq`）→ **不要修**，会变绿但读写错位，属静默错误。
+
 ## 为什么需要 CRC 闸门
 
 模块能否加载取决于 `.ko` 的 `__versions` 段里的 CRC 与内核 `__kcrctab` 是否一致（`CONFIG_MODVERSIONS=y`）。vermagic 的版本段在模块带 CRC 时会被 `same_magic()` 跳过——这台机器的 vendor 模块是 **6.6.92** 编的，装进 **6.6.87** 内核，就是靠这一点。
