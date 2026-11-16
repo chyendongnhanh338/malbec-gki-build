@@ -1,0 +1,34 @@
+diff --git a/include/net/net_namespace.h b/include/net/net_namespace.h
+index aef1c7dc9..ab7e3a5e7 100644
+--- a/include/net/net_namespace.h
++++ b/include/net/net_namespace.h
+@@ -146,9 +146,6 @@ struct net {
+ #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+ 	struct netns_ct		ct;
+ #endif
+-#if defined(CONFIG_NF_TABLES) || defined(CONFIG_NF_TABLES_MODULE)
+-	struct netns_nftables	nft;
+-#endif
+ #if IS_ENABLED(CONFIG_NF_FLOW_TABLE)
+ 	struct netns_ft ft;
+ #endif
+@@ -190,6 +187,19 @@ struct net {
+ #if IS_ENABLED(CONFIG_SMC)
+ 	struct netns_smc	smc;
+ #endif
++
++#if defined(CONFIG_NF_TABLES) || defined(CONFIG_NF_TABLES_MODULE)
++#ifndef __GENKSYMS__
++	/*
++	 * ABI: struct netns_nftables does not exist in the stock build
++	 * (CONFIG_NF_TABLES=n).  Keeping it at the tail means no pre-existing
++	 * struct net field moves, and hiding it from genksyms keeps the hash of
++	 * struct net -- and of the ~700 exported symbols whose type graph
++	 * reaches it -- identical to the stock kernel.
++	 */
++	struct netns_nftables	nft;
++#endif
++#endif
+ } __randomize_layout;
+ 
+ #include <linux/seq_file_net.h>
