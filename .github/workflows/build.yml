@@ -103,7 +103,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ack
-          key: ack-${{ env.KERNEL_BRANCH }}-v1
+          # key 必须带上固定 ref：否则 pin 到某个 tag 的跑法会把该 tag 的树
+          # 存进分支 key，下一次「分支头」构建会静默复用那棵树（版本不对还不报错）
+          key: ack-${{ env.KERNEL_BRANCH }}-${{ inputs.kernel_commit || 'head' }}-v1
 
       - name: Fetch ACK source
         run: |
