@@ -1,118 +1,59 @@
-diff --git a/include/linux/cgroup-defs.h b/include/linux/cgroup-defs.h
-index b04bc9b2f..6ef0ceb74 100644
---- a/include/linux/cgroup-defs.h
-+++ b/include/linux/cgroup-defs.h
-@@ -63,6 +63,24 @@ enum cgroup_subsys_id {
- #include <linux/cgroup_subsys.h>
- 	CGROUP_SUBSYS_COUNT,
- };
-+
-+/*
-+ * ABI: CONFIG_CGROUP_PIDS / CONFIG_CGROUP_DEVICE each add one entry to
-+ * cgroup_subsys.h, growing every CGROUP_SUBSYS_COUNT-sized array below and
-+ * therefore changing the genksyms hash of struct css_set, struct cgroup and
-+ * struct cgroup_root -- and, through task_struct->cgroups, of ~1400 exported
-+ * symbols.  Freeze the count genksyms sees at the stock value by subtracting
-+ * exactly the subsystems that stock did not have.  Each subtraction must be
-+ * conditional: if a subsystem is off, the runtime count already equals the
-+ * stock count and subtracting again would break the CRC.
-+ */
-+#ifdef __GENKSYMS__
-+#define CGROUP_SUBSYS_ABI_COUNT \
-+	(CGROUP_SUBSYS_COUNT - IS_ENABLED(CONFIG_CGROUP_PIDS) \
-+			    - IS_ENABLED(CONFIG_CGROUP_DEVICE))
-+#else
-+#define CGROUP_SUBSYS_ABI_COUNT CGROUP_SUBSYS_COUNT
-+#endif
- #undef SUBSYS
- 
- /* bits in struct cgroup_subsys_state flags field */
-@@ -234,7 +252,7 @@ struct css_set {
- 	 * immutable after creation apart from the init_css_set during
- 	 * subsystem registration (at boot time).
- 	 */
--	struct cgroup_subsys_state *subsys[CGROUP_SUBSYS_COUNT];
-+	struct cgroup_subsys_state *subsys[CGROUP_SUBSYS_ABI_COUNT];
- 
- 	/* reference count */
- 	refcount_t refcount;
-@@ -274,7 +292,7 @@ struct css_set {
- 	 * ->subsys[ssid]->cgroup->e_csets[ssid] and provides a way to
- 	 * iterate through all css's attached to a given cgroup.
- 	 */
--	struct list_head e_cset_node[CGROUP_SUBSYS_COUNT];
-+	struct list_head e_cset_node[CGROUP_SUBSYS_ABI_COUNT];
- 
- 	/* all threaded csets whose ->dom_cset points to this cset */
- 	struct list_head threaded_csets;
-@@ -515,7 +533,7 @@ struct cgroup {
- 	u16 old_subtree_ss_mask;
- 
- 	/* Private pointers for each registered subsystem */
--	struct cgroup_subsys_state __rcu *subsys[CGROUP_SUBSYS_COUNT];
-+	struct cgroup_subsys_state __rcu *subsys[CGROUP_SUBSYS_ABI_COUNT];
- 
- 	struct cgroup_root *root;
- 
-@@ -532,7 +550,7 @@ struct cgroup {
- 	 * following lists all css_sets which point to this cgroup's css
- 	 * for the given subsystem.
- 	 */
--	struct list_head e_csets[CGROUP_SUBSYS_COUNT];
-+	struct list_head e_csets[CGROUP_SUBSYS_ABI_COUNT];
- 
- 	/*
- 	 * If !threaded, self.  If threaded, it points to the nearest
-@@ -650,7 +668,7 @@ struct cgroup_root {
- #ifndef __GENKSYMS__
- 	ANDROID_BACKPORT_USE_ARRAY(1, CGROUP_ROOT_BACKPORT_PADDING_SIZE, struct rcu_head rcu);
- #else
--	ANDROID_BACKPORT_USE_ARRAY(1, CGROUP_SUBSYS_COUNT * sizeof(atomic_t), struct rcu_head rcu);
-+	ANDROID_BACKPORT_USE_ARRAY(1, CGROUP_SUBSYS_ABI_COUNT * sizeof(atomic_t), struct rcu_head rcu);
- #endif
- };
- 
 diff --git a/include/linux/cgroup_subsys.h b/include/linux/cgroup_subsys.h
-index 445235487..23f577a01 100644
+index 445235487..216ddd748 100644
 --- a/include/linux/cgroup_subsys.h
 +++ b/include/linux/cgroup_subsys.h
-@@ -29,9 +29,6 @@ SUBSYS(io)
+@@ -29,10 +29,6 @@ SUBSYS(io)
  SUBSYS(memory)
  #endif
  
 -#if IS_ENABLED(CONFIG_CGROUP_DEVICE)
 -SUBSYS(devices)
 -#endif
- 
+-
  #if IS_ENABLED(CONFIG_CGROUP_FREEZER)
  SUBSYS(freezer)
-@@ -53,9 +50,6 @@ SUBSYS(net_prio)
+ #endif
+@@ -53,10 +49,6 @@ SUBSYS(net_prio)
  SUBSYS(hugetlb)
  #endif
  
 -#if IS_ENABLED(CONFIG_CGROUP_PIDS)
 -SUBSYS(pids)
 -#endif
- 
+-
  #if IS_ENABLED(CONFIG_CGROUP_RDMA)
  SUBSYS(rdma)
-@@ -72,6 +66,20 @@ SUBSYS(misc)
+ #endif
+@@ -72,6 +64,33 @@ SUBSYS(misc)
  SUBSYS(debug)
  #endif
  
 +/*
 + * ABI: the stock kernel for this device shipped with CONFIG_CGROUP_DEVICE=n
-+ * and CONFIG_CGROUP_PIDS=n, so these two ids did not exist.  They are listed
-+ * last so that every subsystem that *did* exist keeps its stock numeric value
-+ * in enum cgroup_subsys_id -- otherwise every id after "memory" would shift
-+ * and any consumer that stored an id numerically would silently misbehave.
++ * and CONFIG_CGROUP_PIDS=n, so neither id existed.  Two things keep the
++ * modversions ABI identical:
++ *
++ * 1. They are listed LAST so every subsystem that already existed keeps its
++ *    stock numeric value in enum cgroup_subsys_id -- otherwise every id after
++ *    "memory" would shift and any consumer storing an id numerically would
++ *    silently misbehave.
++ * 2. They are hidden from genksyms.  genksyms hashes the *preprocessed
++ *    declaration text*: CGROUP_SUBSYS_COUNT is an enum constant, not a macro,
++ *    so it survives preprocessing as a bare token and the declarations
++ *    "subsys[CGROUP_SUBSYS_COUNT]" read identically either way -- but the
++ *    enum member list is hashed as well, and struct css_set / struct cgroup /
++ *    struct cgroup_root embed arrays sized from it.  Feeding genksyms the
++ *    stock member list keeps the CRC of every symbol whose type graph reaches
++ *    task_struct->cgroups (~1400 of them) byte-identical to the stock kernel.
 + */
++#ifndef __GENKSYMS__
 +#if IS_ENABLED(CONFIG_CGROUP_DEVICE)
 +SUBSYS(devices)
 +#endif
 +#if IS_ENABLED(CONFIG_CGROUP_PIDS)
 +SUBSYS(pids)
 +#endif
++#endif /* !__GENKSYMS__ */
 +
  /*
   * DO NOT ADD ANY SUBSYSTEM WITHOUT EXPLICIT ACKS FROM CGROUP MAINTAINERS.
