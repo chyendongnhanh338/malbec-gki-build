@@ -119,9 +119,21 @@ su -c 'droidspaces check'            # 应该全绿，且不需要加载任何 .
 ### 5. 回滚
 
 ```bash
-fastboot flash boot_a stock-boot_a.img
+fastboot flash boot stock-boot_a.img     # A/B 设备会写到当前槽
 fastboot reboot
 ```
+
+现成的回滚资产在 release `v1.2`：
+
+| 资产 | 用法 |
+|---|---|
+| `stock-boot_a-restore.img.zip` | 解压得 `stock-boot_a.img`（内核段 = 原厂 `6.6.87-android15-8`，与设备原图 sha256 一致）→ `fastboot flash boot` |
+| `ak3-stock-restore.zip` | 刷不进 fastboot 但能进 recovery 时用：同样是 AnyKernel3 形态，把**原厂内核**写回 boot |
+
+> **卡 logo 后第一件事是把原厂 boot 刷回来，别急着二次尝试。**
+> 刷回来能正常开机后，`/sys/fs/pstore/console-ramoops*` 里通常还留着上一次失败启动的
+> 内核日志（pstore 跨重启保留），这是唯一能定位「为什么没起来」的证据：
+> `adb shell su -c 'cat /sys/fs/pstore/console-ramoops*' > ramoops.txt`
 
 bootloader 一直在，风险窗口只有「刷完 `boot_a` 到确认能开机」这一段。
 
