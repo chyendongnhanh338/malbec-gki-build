@@ -37,6 +37,18 @@ ls img/gate-all.md                        # 闸门报告
 产物内容：`out/arch/arm64/boot/Image`（内核）、`out/Module.symvers`、
 `out/.config`（这次实际用的配置）、`gate-<variant>.{md,json}`、`build.log`。
 
+### 1.5 三种刷入方式，按你的环境挑一个
+
+| 你的环境 | 用哪个 | 需要 PC 吗 |
+|---|---|---|
+| 有第三方 recovery（TWRP / OrangeFox） | 在 recovery 里「安装」`ak3-all.zip` | 不需要 |
+| 装了内核管理 App（EX Kernel Manager / FK Kernel Manager / SmartPack） | App 里刷 `ak3-all.zip`（AK3 zip 它直接支持） | 不需要 |
+| 只有 Magisk / KernelSU，没有自定义 recovery | **不能**用模块安装器刷 AK3 zip（它不是模块格式，没有 `module.prop`）→ 走 PC 的 fastboot 路线 | 需要 |
+| 有 PC（Windows 也行） | `scripts/repack-boot.ps1`（Windows）/ `scripts/repack-boot.sh`（Linux）重打包后 `fastboot flash boot_a` | 需要 |
+
+> AnyKernel3 zip 的定位是「recovery 刷机包」，只换 `boot` 分区的 kernel 段。
+> Magisk / KernelSU 的「模块 → 从本地安装」会报 *Not a Magisk module* 而拒绝，这不是包坏了。
+
 ### 2. 备份原厂 boot，只换 kernel 段
 
 ```bash
