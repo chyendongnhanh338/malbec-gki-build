@@ -22,11 +22,28 @@ for p in $PATCHES; do
     echo "  = $name (already applied)"
     continue
   fi
-  if ! git -C "$SRC" apply --check "$p" >/dev/null 2>&1; then
+  # 先试严格应用，再逐步放宽（不同 ACK tag 之间上下文可能有少量漂移）
+  applied=0
+  for opts in "" "-C1" "--recount -C1"; do
+    # shellcheck disable=SC2086
+    if git -C "$SRC" apply $opts --check "$p" >/dev/null 2>&1; then
+      # shellcheck disable=SC2086
+      git -C "$SRC" apply $opts "$p"
+      applied=1
+      [ -n "$opts" ] && echo "  + $name (fuzzy: $opts)" || echo "  + $name"
+      break
+    fi
+  done
+  if [ "$applied" = 0 ] && command -v patch >/dev/null; then
+    if ( cd "$SRC" && patch -p1 --batch --forward -F3 --dry-run < "$p" >/dev/null 2>&1 ); then
+      ( cd "$SRC" && patch -p1 --batch --forward -F3 < "$p" >/dev/null )
+      applied=1
+      echo "  + $name (patch -F3)"
+    fi
+  fi
+  if [ "$applied" = 0 ]; then
     echo "  ! $name does not apply cleanly — ACK 上游可能改了，需要更新补丁" >&2
     git -C "$SRC" apply --check "$p" || true
     exit 1
   fi
-  git -C "$SRC" apply "$p"
-  echo "  + $name"
 done
