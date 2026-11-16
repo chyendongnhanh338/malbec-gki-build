@@ -14,3 +14,4 @@ stock-boot_a.img
 dist/
 art/
 __pycache__/
+.work/

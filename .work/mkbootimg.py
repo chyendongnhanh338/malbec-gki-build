@@ -1,1 +1,0 @@
-/home/paseo/git/malbec-gki-build/.work/mkbootimg/mkbootimg.py
