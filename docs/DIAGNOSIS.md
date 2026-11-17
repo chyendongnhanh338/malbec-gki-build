@@ -239,6 +239,34 @@ ls /data/adb/modules
 
 停止容器只崩 `boot-g1g2` / `boot-all` → cgroup 是元凶 → 放弃 `--pids-limit`，用 `boot-safe`。
 
+
+### 已确认：是 hang（看门狗复位），不是 panic
+
+触发：容器内**最后一个进程退出**（`exit`）→ `zap_pid_ns_processes()` 给命名空间内所有任务发 SIGKILL
+并 `kernel_wait4()` 循环等待它们全部退出；同时走 `exit_sem`/`exit_shm`、`free_ipc_ns`、`cgroup_exit`、
+`put_user_ns`。若有任务卡在 D 状态或释放路径死锁 → 循环不退出 → 看门狗复位。
+
+**所以要在 PC 侧流式抓 `dmesg`**（设备 pstore 为空，卡住期间的日志重启后不会留）。
+
+武装内核（把「卡」变成「带栈的崩」）：
+
+```sh
+su -c 'echo 1 > /proc/sys/kernel/panic_on_oops'
+su -c 'echo 1 > /proc/sys/kernel/softlockup_panic'
+su -c 'echo 1 > /proc/sys/kernel/hung_task_panic'
+su -c 'echo 15 > /proc/sys/kernel/hung_task_timeout_secs'
+su -c 'echo 1 > /proc/sys/kernel/hung_task_warnings'
+su -c 'echo 1 > /proc/sys/kernel/sysrq'          # Android 默认常为 0
+```
+
+卡住瞬间（adb 若还能通）手动打栈：
+
+```sh
+su -c 'echo l > /proc/sysrq-trigger'   # 所有 CPU 的 NMI backtrace（抓死锁最有效）
+su -c 'echo t > /proc/sysrq-trigger'   # 所有任务栈
+su -c 'echo w > /proc/sysrq-trigger'   # 只打 D 状态任务
+```
+
 ### 抓 panic 现场
 
 这台机 `pstore` 是空的（DTB 有 `ramoops-region` 但无驱动绑定），所以崩溃栈必须
