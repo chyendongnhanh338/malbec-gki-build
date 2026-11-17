@@ -1,3 +1,46 @@
+
+## 当前可用产物：release `v5`（6.6.144，trim=off，全档位实测可开机）
+
+| 包 | 内容 | 状态 |
+|---|---|---|
+| `boot-g1.zip` | PID_NS / IPC_NS / SYSVIPC / POSIX_MQUEUE | ✅ 可用 |
+| `boot-g1dev.zip` | + DEVTMPFS | ✅ |
+| `boot-safe.zip` | + MACVLAN / USER_NS / IPv6 NAT / xt_addrtype | ✅ |
+| `boot-g1g2.zip` | g1dev + CGROUP_PIDS / CGROUP_DEVICE | ✅ |
+| **`boot-all.zip`** | 以上全部（含 NF_TABLES） | ✅ **实测可开机** |
+
+唯一未开：`CONFIG_CFS_BANDWIDTH`（`struct cfs_rq` 按值内嵌在 `struct rq` 里，加成员会让
+`sched-walt.ko` / `lenovohyperSched.ko` 读到错位字段——静默错误比闸门变红更糟）。
+
+### 刷写
+
+```sh
+# 解压 zip 得 boot_a.img
+fastboot flash boot_a boot_a.img     # 或 fastboot boot boot_a.img（临时引导，不写分区）
+# 回滚
+fastboot flash boot_a stock-boot_a.img
+```
+
+### 验收
+
+```sh
+adb shell getprop sys.boot_completed                                  # 1
+adb shell "grep -c '' /proc/modules"                                  # ≈502
+adb shell "service list | grep -E 'media.audio_(flinger|policy)'"     # 两个都在
+adb shell "unshare -pf --mount-proc true"                             # PID_NS
+adb shell "unshare -U true"                                           # USER_NS
+adb shell "cat /sys/fs/cgroup/cgroup.controllers"                     # 应含 pids
+adb shell "droidspaces check"
+```
+
+### 关键约束（踩过的坑，别再踩）
+
+**`CONFIG_TRIM_UNUSED_KSYMS` 必须为 n。** 设为 y 时内核只导出 ABI 白名单里的符号
+（9539 个），会裁掉 67 个原厂内核本来导出的符号；厂商模块在 probe 期按名字解析失败，
+音频 HAL 起不来，系统卡在开机动画里（`AudioService.<init>` 无限等 `IAudioFlingerService`）。
+`CRC` 闸门原理上看不见这类问题，因此 `gate-crc.py` 现在额外要求
+**新内核导出集合 ⊇ 原厂 8755 个导出**（`config/stock-exports-6.6.87.txt`）。
+
 # malbec-gki-build
 
 给 **Lenovo Idea Tab Pro Gen 2（`malbec` / TB390FU，Qualcomm SM8735P）** 自编 GKI 内核的构建仓库。
