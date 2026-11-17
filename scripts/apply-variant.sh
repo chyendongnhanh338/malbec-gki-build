@@ -18,6 +18,7 @@ DEVCFG="$REPO/config/device-6.6.87.config"
 case "$VARIANT" in
   baseline) FRAGS=() ;;
   g1)       FRAGS=(G1-container) ;;
+  g1dev)    FRAGS=(G1-container S0-devtmpfs) ;;
   safe)     FRAGS=(G1-container S1-safe-extra) ;;
   e-ip6nat) FRAGS=(E8-ip6nat) ;;
   e-xtaddrtype) FRAGS=(E9-xtaddrtype) ;;
