@@ -86,6 +86,35 @@ boot-6687-g1 开 之后
 **其后所有字段整体位移**。genksyms 只对声明文本求哈希，所以补丁 0002 能让 CRC 归零，
 但真实偏移确实变了 —— 这是 CRC 闸门原理上抓不到的一类问题。
 
+
+## 全部 11 个已签产物（release v2）
+
+`boot-6687-*.zip` → 解压得 `boot_a.img`，全部 96 MB 满分区、testkey 签名。
+
+| 包 | PID | IPC | SYSV | MQ | DEVTMPFS | CGROUPS | MACVLAN | NFT | USER_NS |
+|---|---|---|---|---|---|---|---|---|---|
+| `baseline` | – | – | – | – | – | – | – | – | – |
+| `pidonly` | ✅ | – | – | – | – | – | – | – | – |
+| `mqonly` | – | – | – | ✅ | – | – | – | – | – |
+| `sysv-noipcns` | – | – | ✅ | – | – | – | – | – | – |
+| `sysvonly` | – | ✅ | ✅ | – | – | – | – | – | – |
+| `g1` | ✅ | ✅ | ✅ | ✅ | – | – | – | – | – |
+| `g1-noipcns` | ✅ | – | ✅ | ✅ | – | – | – | – | – |
+| `g1dev` | ✅ | ✅ | ✅ | ✅ | ✅ | – | – | – | – |
+| `safe` | ✅ | ✅ | ✅ | ✅ | ✅ | – | ✅ | – | ✅ |
+| `g1g2` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | – | – | – |
+| `all` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+`safe` / `all` 另含 `IP6_NF_NAT` + `NETFILTER_XT_MATCH_ADDRTYPE`。
+
+### Kconfig 陷阱
+
+`init/Kconfig`：`config IPC_NS` 是 **`default y`** + **`depends on (SYSVIPC || POSIX_MQUEUE)`**。
+开 `SYSVIPC` 或 `POSIX_MQUEUE` 会**自动**打开 `IPC_NS`。
+要真正隔离必须在 fragment 里显式写 `# CONFIG_IPC_NS is not set`（`mqonly` / `sysv-noipcns` / `g1-noipcns` 就是这么做的）。
+
+同理 `config PID_NS` 也是 `default y`，stock 之所以是 n，是 `gki_defconfig` 里显式关掉的。
+
 ## 已验证不可行
 
 | 项 | 结论 |
