@@ -118,10 +118,16 @@ boot-6687-g1 开 之后
 
 ## 实测：6.6.87 基线不可用（重要）
 
-> ⚠️ 后续补充（同日）：同一音频阻塞在 **6.6.144 + g1** 上也复现了（403 模块、无 audio_flinger、boot_completed 空）。
-> 因此「6.6.87 不可用」这个结论**存疑**——更可能是**启动竞态**（vendor 音频 HAL 先于依赖模块就绪而崩溃，
-> 且该 HAL 没在 .rc 里声明 AIDL interface，导致 audioserver 的 lazy-start 永远失败、无法自愈），
-> 与内核版本/开关无必然关系。判定方法：同一镜像连续重启多次，看成功率。
+> ✅ **定案（同日，单变量实验）：元凶是 `CONFIG_TRIM_UNUSED_KSYMS=y`，与内核版本、与 CONFIG 开关都无关。**
+>
+> | 镜像 | TRIM | ABI 补丁 | 结果 |
+> |---|---|---|---|
+> | v1.2 `boot-baseline`（6.6.144） | off | 无 | ✅ 开机 |
+> | v4-iso `boot-B-trim-off-patch`（6.6.144） | **off** | 有 | ✅ 开机 |
+> | v4-iso `boot-A-trim-on-nopatch`（6.6.144） | **on** | 无 | ❌ 卡 |
+> | 6.6.87 baseline / g1 / pidonly / mqonly / g1dev（全部 trim=on） | on | 有 | ❌ 卡 |
+>
+> 因此 6.6.87 那条"版本不兼容"的结论作废；所有构建**一律 trim=off**（workflow 默认已改）。
 
 | 内核 | 结果 | 定位 |
 |---|---|---|
@@ -144,6 +150,36 @@ SystemServer.startOtherServices(SystemServer.java:2489)
 `system_server` 在构造 `AudioService` 时无限等待 → `boot_progress_ams_ready` 之后全部不出现。
 
 **结论：版本号对齐（6.6.87 == 设备）不等于可用。** 必须用分支头（6.6.144）。
+
+
+## TRIM_UNUSED_KSYMS 是卡开机的真凶（已定案）
+
+### 现象
+所有 `trim=on` 的镜像都在同一处卡住：`sys.boot_completed` 空、`/proc/modules` ≈403、
+无 `media.audio_flinger`、`system_server` 主线程卡在 `AudioService.<init>` 等 `IAudioFlingerService`。
+
+### 为什么 CRC 闸门看不出来
+TRIM 只改变"导出了哪些符号"，**不改变任何 CRC**。718 个厂商模块的 `__versions` 全对 ⇒ `MISMATCH: 0`,
+但内核实际少导出了 7712 个符号（trim=on 9539 vs trim=off 17251），其中 67 个是**原厂内核本来导出**的。
+厂商模块在 probe 期若按名字解析符号失败，子系统就起不来——这条链路闸门原来完全看不见。
+
+### 新闸门（已加进 `scripts/gate-crc.py`）
+`--stock-exports config/stock-exports-6.6.87.txt`：要求**新内核导出集合 ⊇ 原厂导出集合**（8755 个，
+由 `vmlinux-to-elf` 从 boot Image 重建后解析 `__ksymtab` 得到）。
+
+| 构建 | 原厂导出覆盖 | 退出码 |
+|---|---|---|
+| trim=off（当前全部产物） | **8755/8755** ✅ | 0 |
+| trim=on（旧产物） | 8688/8755 ❌ 少 67 | 1 |
+
+报告里另加一行 `TRIM_UNUSED_KSYMS: on ⚠️ …已实测导致卡开机`。
+
+### 判据速查
+```sh
+adb shell getprop sys.boot_completed                                   # 1 = 好
+adb shell "grep -c '' /proc/modules"                                   # 健康 ≈502；≈403 且卡 = 同一症状
+adb shell "service list | grep -E 'media.audio_(flinger|policy)'"      # 健康时两个都在
+```
 
 ## 快速判据（每次卡住先跑这两条）
 

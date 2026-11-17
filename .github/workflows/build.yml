@@ -25,12 +25,12 @@ on:
         options: ["on", "off"]
         default: "on"
       trim:
-        description: "保留 CONFIG_TRIM_UNUSED_KSYMS（off = 全导出，兜底用）"
+        description: "CONFIG_TRIM_UNUSED_KSYMS（默认 off；on 已实测会导致卡开机，仅用于对照实验）"
         type: choice
         # 必须加引号：YAML 1.1 会把裸 on/off 解析成布尔值，
         # 导致 dispatch 时报 "Provided value 'on' ... not in the list of allowed values"
-        options: ["on", "off"]
-        default: "on"
+        options: ["off", "on"]
+        default: "off"
   push:
     tags: ["v*"]
 
@@ -160,7 +160,7 @@ jobs:
       - name: Prepare config
         run: |
           export PATH="$PWD/clang/bin:$PATH"
-          bash scripts/apply-variant.sh "$PWD/ack" "$PWD/out" "${{ matrix.variant }}" "${{ inputs.trim || 'on' }}"
+          bash scripts/apply-variant.sh "$PWD/ack" "$PWD/out" "${{ matrix.variant }}" "${{ inputs.trim || 'off' }}"
 
       - name: Build Image + modules
         run: |
@@ -186,6 +186,8 @@ jobs:
           python3 scripts/gate-crc.py out/Module.symvers vk/modules \
               --gki-symbols ack/abi_symbollist.raw \
               --min-symvers "$MIN" \
+              --stock-exports config/stock-exports-6.6.87.txt \
+              --trim "${{ inputs.trim || 'off' }}" \
               --json "gate-${{ matrix.variant }}.json" \
               --variant "${{ matrix.variant }}" > "gate-${{ matrix.variant }}.md"
           rc=$?

@@ -14,6 +14,11 @@ MISSING   厂商模块引用了某符号，而新内核 Module.symvers 里没有
             missing_vendor 不在 ABI 列表里，通常由另一个厂商模块自己导出
                            -> 正常，仅供参考。
 
+STOCK-CUT 新内核缺少原厂内核本该导出的符号（给了 --stock-exports 时启用）。
+          这是 TRIM_UNUSED_KSYMS 的典型症状：CRC 全对（闸门原来看不出问题），
+          但内核少导出上百个原厂导出过的符号，某些厂商模块在 probe 期按名字查符号
+          失败 -> 子系统起不来 -> 卡开机。硬失败，退出码 1。
+
 TOO-FEW   新内核 Module.symvers 条数低于 --min-symvers
           -> 白名单没被 modpost 读到时的典型症状：导出被裁到只剩树内模块用到的那些，
              编出来的 Image 会让原厂 vendor 模块全部 "Unknown symbol"。
@@ -127,6 +132,10 @@ def main():
     ap.add_argument("--variant", default="")
     ap.add_argument("--gki-symbols", default="")
     ap.add_argument("--min-symvers", type=int, default=0)
+    ap.add_argument("--stock-exports", default="",
+                    help="原厂内核导出符号清单（一行一个），要求新内核导出集合覆盖它")
+    ap.add_argument("--trim", choices=["on", "off"], default="",
+                    help="本次是否启用 CONFIG_TRIM_UNUSED_KSYMS，仅用于报告标注")
     args = ap.parse_args()
 
     new = load_symvers(args.symvers)
@@ -163,8 +172,17 @@ def main():
     missing_gki = {k: v for k, v in missing.items() if k in gki} if gki else {}
     missing_vendor = {k: v for k, v in missing.items() if k not in gki} if gki else dict(missing)
 
+    # section 边界标记不是真实导出，原厂清单里由 vmlinux 重建带出来的，忽略
+    STOCK_ARTIFACTS = {"__start___ksymtab_gpl", "__stop___ksymtab_gpl",
+                       "__start___ksymtab", "__stop___ksymtab"}
+    stock = set()
+    if args.stock_exports:
+        with open(args.stock_exports, errors="replace") as fh:
+            stock = {ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")}
+    stock_cut = sorted(stock - set(new) - STOCK_ARTIFACTS) if stock else []
+
     too_few = args.min_symvers and len(new) < args.min_symvers
-    ok = not mismatches and not too_few
+    ok = not mismatches and not too_few and not stock_cut
     lines = [
         f"# CRC gate — variant `{args.variant or 'n/a'}`",
         "",
@@ -173,6 +191,15 @@ def main():
         f"- symbols in new Module.symvers: **{len(new)}**",
         f"- **MISMATCH: {len(mismatches)}** " + ("✅" if not mismatches else "❌"),
     ]
+    if args.trim:
+        lines.append(
+            f"- TRIM_UNUSED_KSYMS: **{args.trim}** "
+            + ("✅ 全导出" if args.trim == "off"
+               else "⚠️ 会裁掉原厂导出过的符号，已实测导致卡开机，仅用于对照"))
+    if stock:
+        lines.append(
+            f"- 原厂导出覆盖: **{len(stock) - len(stock_cut)}/{len(stock)}** "
+            + ("✅" if not stock_cut else f"❌ 少 {len(stock_cut)} 个（TRIM 或 config 关掉了子系统）"))
     if args.min_symvers:
         lines.append(
             f"- exports: **{len(new)}** (min {args.min_symvers}) "
@@ -191,6 +218,15 @@ def main():
                   f"新内核只导出了 {len(new)} 个符号，低于下限 {args.min_symvers}。",
                   "检查 `abi_symbollist.raw` 是否为**扁平格式**（一行一个符号、无缩进、无表头），"
                   "以及 modpost 是否在构建目录或 srctree 找到了它。", ""]
+
+    if stock_cut:
+        lines += ["", "## STOCK-CUT — 原厂导出过、这次没导出", "",
+                  "CRC 全对不代表可用：厂商模块可能在 probe 期按名字查这些符号。",
+                  "最常见原因是 `CONFIG_TRIM_UNUSED_KSYMS=y`，其次是某个子系统被 config 关掉了。", ""]
+        for name in stock_cut[:40]:
+            lines.append(f"- `{name}`")
+        if len(stock_cut) > 40:
+            lines.append(f"- …（共 {len(stock_cut)} 个）")
 
     if missing_gki:
         lines += ["", "<details><summary>missing_gki（前 30 条）</summary>", ""]
@@ -226,6 +262,9 @@ def main():
         "missing_gki": sorted(missing_gki),
         "missing_vendor_count": len(missing_vendor),
         "no_versions": no_versions,
+        "trim": args.trim,
+        "stock_exports": len(stock),
+        "stock_cut": stock_cut,
     }
     with open(args.json, "w") as fh:
         json.dump(payload, fh, indent=1, sort_keys=True)
