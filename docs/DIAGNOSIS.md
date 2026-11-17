@@ -118,6 +118,11 @@ boot-6687-g1 开 之后
 
 ## 实测：6.6.87 基线不可用（重要）
 
+> ⚠️ 后续补充（同日）：同一音频阻塞在 **6.6.144 + g1** 上也复现了（403 模块、无 audio_flinger、boot_completed 空）。
+> 因此「6.6.87 不可用」这个结论**存疑**——更可能是**启动竞态**（vendor 音频 HAL 先于依赖模块就绪而崩溃，
+> 且该 HAL 没在 .rc 里声明 AIDL interface，导致 audioserver 的 lazy-start 永远失败、无法自愈），
+> 与内核版本/开关无必然关系。判定方法：同一镜像连续重启多次，看成功率。
+
 | 内核 | 结果 | 定位 |
 |---|---|---|
 | `6.6.144-4k-<hash>`（分支头 baseline） | ✅ `sys.boot_completed=1`，模块 **502**，`media.audio_flinger`/`audio_policy` 齐全 | 可用 |
