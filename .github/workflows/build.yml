@@ -19,6 +19,11 @@ on:
         type: choice
         options: ["on", "off"]
         default: "on"
+      abi_patches:
+        description: "应用 scripts/patches 里的 ABI 保持补丁（off = 不打补丁，用于隔离变量）"
+        type: choice
+        options: ["on", "off"]
+        default: "on"
       trim:
         description: "保留 CONFIG_TRIM_UNUSED_KSYMS（off = 全导出，兜底用）"
         type: choice
@@ -119,9 +124,15 @@ jobs:
           echo "kernel $(make -s -C ack kernelversion 2>/dev/null || echo unknown) @ $(git -C ack rev-parse --short HEAD)"
 
       - name: Apply ABI patches
+        env:
+          ABI_PATCHES: ${{ inputs.abi_patches || 'on' }}
         run: |
-          bash scripts/apply-patches.sh "$PWD/ack"
-          git -C ack diff --stat
+          if [ "$ABI_PATCHES" = "off" ]; then
+            echo "ABI patches disabled by input (abi_patches=off) — worktree stays clean"
+          else
+            bash scripts/apply-patches.sh "$PWD/ack"
+            git -C ack diff --stat
+          fi
 
       - name: Cache stock vendor modules (CRC oracle)
         uses: actions/cache@v4
