@@ -115,6 +115,55 @@ boot-6687-g1 开 之后
 
 同理 `config PID_NS` 也是 `default y`，stock 之所以是 n，是 `gki_defconfig` 里显式关掉的。
 
+
+## 实测：6.6.87 基线不可用（重要）
+
+| 内核 | 结果 | 定位 |
+|---|---|---|
+| `6.6.144-4k-<hash>`（分支头 baseline） | ✅ `sys.boot_completed=1`，模块 **502**，`media.audio_flinger`/`audio_policy` 齐全 | 可用 |
+| `6.6.87-4k-<hash>-dirty`（ACK tag `android15-6.6-2025-05_r10` baseline） | ❌ 卡开机动画，模块 **403**，无 `media.audio_flinger` | **弃用** |
+
+卡的精确位置（system_server ANR，`main` 线程）：
+
+```
+libaudioclient.so  ServiceHandler::get<IAudioFlingerService>
+android_media_AudioSystem_setMasterBalance
+AudioService.updateMasterBalance(AudioService.java:3033)
+AudioService.readPersistedSettings(AudioService.java:3446)
+AudioService.<init>(AudioService.java:1681)
+SystemServer.startOtherServices(SystemServer.java:2489)
+```
+
+因果链：`audioserver` 拿不到 `android.hardware.audio.core.IConfig/default`（`init: Could not find ... for ctl.interface_start`，
+每秒钟重试）→ 无法创建 AudioFlinger → 不注册 `media.audio_flinger` →
+`system_server` 在构造 `AudioService` 时无限等待 → `boot_progress_ams_ready` 之后全部不出现。
+
+**结论：版本号对齐（6.6.87 == 设备）不等于可用。** 必须用分支头（6.6.144）。
+
+## 快速判据（每次卡住先跑这两条）
+
+```sh
+adb shell getprop sys.boot_completed              # 1 = 通过
+adb shell "grep -c '' /proc/modules"              # 健康 ≈ 502；若 ~403 且卡住 = 音频 HAL 没起来
+adb shell "service list | grep -E 'media.audio_(flinger|policy)'"   # 健康时两个都在
+```
+
+- 模块数 ~403、`media.audio_flinger` 缺失 → **音频阻塞**，与本次内核开关无关；
+- 模块数正常、`media.audio_flinger` 在、但 `boot_completed` 空 → 才是真正由该 CONFIG 引起的新问题。
+
+## 已验证的好状态参照（6.6.144 baseline，2026-11-17）
+
+```
+uname -r                6.6.144-4k-<hash>       # 注意：无 -dirty
+sys.boot_completed      1
+ro.boot.veritymode      enforcing
+ro.boot.verifiedbootstate green
+/proc/modules 行数       502
+dmesg 模块错误           无
+/media.audio_flinger    在
+/vendor/bin/hw          audiohalservice.qti + AIDL audio 服务
+```
+
 ## 已验证不可行
 
 | 项 | 结论 |
