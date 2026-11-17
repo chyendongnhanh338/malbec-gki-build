@@ -205,6 +205,46 @@ dmesg 模块错误           无
 /vendor/bin/hw          audiohalservice.qti + AIDL audio 服务
 ```
 
+
+## 随机重启（停止 droidspaces 容器时触发）
+
+### 第一嫌疑：还装着 LKM 版补丁
+
+内核现在已经**原生支持** PID_NS / IPC_NS / SYSVIPC，如果设备上还留着
+`_patchHarmony` 系的 `droid_lkm*.ko`（它会 hook `sys_call_table` 的
+`__NR_clone/clone3/unshare` 以及 `copy_namespaces` / `switch_task_namespaces` /
+`exit_task_namespaces` / `free_nsproxy`），就会与内核原生实现**双重接管**，
+容器停止时走 `put_nsproxy` 释放路径 → 崩溃。
+
+排查：
+```sh
+lsmod | grep -i droid
+ls /data/adb/modules
+```
+有就删掉模块目录并重启。
+
+### 第二嫌疑：cgroup 子系统数组变长（patch 0002 的已知代价）
+
+`CGROUP_SUBSYS_COUNT` 从 N 变 N+2，`struct css_set` / `struct cgroup` 里的
+`subsys[]` **真的长了 16 字节**，其后字段整体位移。CRC 闸门看不见（只比签名）。
+受影响的厂商模块：`msm_drm`(284 符号) / `msm_kgsl`(132) / `sched-walt`(25)。
+
+二分验证（都是 v5 的包）：
+| 包 | 含 cgroup | 含 USER_NS | 含 NF_TABLES |
+|---|---|---|---|
+| `boot-g1dev` | – | – | – |
+| `boot-safe` | – | ✅ | – |
+| `boot-g1g2` | ✅ | – | – |
+| `boot-all` | ✅ | ✅ | ✅ |
+
+停止容器只崩 `boot-g1g2` / `boot-all` → cgroup 是元凶 → 放弃 `--pids-limit`，用 `boot-safe`。
+
+### 抓 panic 现场
+
+这台机 `pstore` 是空的（DTB 有 `ramoops-region` 但无驱动绑定），所以崩溃栈必须
+**在 PC 侧一边流一边存**：`scripts/_panic_watch.ps1`（`adb shell cat /proc/kmsg`
+的输出写到 PC 上的文件，设备重启也不丢）。
+
 ## 已验证不可行
 
 | 项 | 结论 |
